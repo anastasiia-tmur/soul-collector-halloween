@@ -10,6 +10,12 @@
 <link href="https://fonts.googleapis.com/css2?family=Rubik+Wet+Paint&display=block&subset=cyrillic" rel="stylesheet">
 <style>
   html,body{margin:0;height:100%;background:#0b0714;overflow:hidden;font-family:system-ui,-apple-system,sans-serif;color:#f3e9d2}
+  #pad{position:fixed;display:none;grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(3,1fr);gap:6px;z-index:5;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;touch-action:none}
+  #pad button{border:3px solid #3a2a16;border-radius:18px;background:rgba(224,210,170,.88);color:#3a2a16;font-size:26px;padding:0;line-height:1;touch-action:none;-webkit-tap-highlight-color:transparent;font-family:system-ui}
+  #pad button:active{background:rgba(160,140,90,.95)}
+  #pad.skin button{border:0;border-radius:0;background:url('assets/btn.png') center/100% 100% no-repeat;display:flex;align-items:center;justify-content:center;transition:transform .06s,filter .06s}
+  #pad.skin button:active{background:url('assets/btn.png') center/100% 100% no-repeat;transform:scale(.92);filter:brightness(.82)}
+  #pad button svg{width:46%;height:46%;pointer-events:none;filter:drop-shadow(0 1px 0 rgba(255,255,255,.4))}
   #vol{position:fixed;left:-100px;top:0;width:38px;height:38px;border:0;background:none;padding:0;cursor:pointer;line-height:1;font-size:20px}
   #vol img{width:100%;height:100%;display:block;pointer-events:none;transition:filter .2s}
   #vol.off img{filter:grayscale(1) opacity(.45)}
@@ -25,6 +31,10 @@
 <script>
 // ---------- Настройки ----------
 const W = 20, H = 20;                 // поле 20×20, замкнуто в кольцо, видно целиком
+// телефон или планшет (сенсорный экран): на таких устройствах нет клавиатуры, поэтому показываем кнопки управления
+const IS_TOUCH = (window.matchMedia && matchMedia('(pointer: coarse)').matches) || navigator.maxTouchPoints > 0;
+let PAD_BTN = 64;                     // размер кнопки управления в пикселях (считается в resize)
+let PAD_RESERVE = 0;                  // сколько места внизу оставляем под кнопки на вертикальном экране
 let HUD = 140;                        // высота шапки в пикселях (считается в resize по размеру свитка)
 const TYPES = ['bat', 'ghost', 'witch', 'owl'];
 const EMOJI = { bat:'🦇', ghost:'👻', witch:'🧙', owl:'🦉', skeleton:'💀', pumpkin:'🎃' };
@@ -104,15 +114,19 @@ function hash(x, y) {
   h = (h ^ (h >>> 13)) * 1274126177 | 0;
   return (h ^ (h >>> 16)) >>> 0;
 }
+// ширина шапки: на низком экране (телефон лёжа) шапка не должна съедать больше пятой части высоты
+function hudWidth() { return Math.min(cw - 16, 920, ch * 0.2 * SCROLL.hud.aspect); }
 function resize() {
   dpr = window.devicePixelRatio || 1;
   cw = innerWidth; ch = innerHeight;
   cv.width = cw * dpr; cv.height = ch * dpr;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  HUD = Math.round(8 + Math.min(cw - 16, 920) / SCROLL.hud.aspect + 10);
-  CS = Math.max(12, Math.floor(Math.min(cw / W, (ch - HUD - 10) / H)));
+  HUD = Math.round(8 + hudWidth() / SCROLL.hud.aspect + 10);
+  PAD_BTN = Math.round(Math.max(52, Math.min(84, Math.min(cw, ch) * 0.17)));
+  PAD_RESERVE = (IS_TOUCH && ch > cw) ? PAD_BTN * 3 + 36 : 0;           // вертикальный экран: кнопки под полем
+  CS = Math.max(12, Math.floor(Math.min(cw / W, (ch - HUD - 10 - PAD_RESERVE) / H)));
   ox = Math.floor((cw - W * CS) / 2);
-  oy = HUD + Math.floor((ch - HUD - H * CS) / 2);
+  oy = HUD + Math.floor((ch - HUD - PAD_RESERVE - H * CS) / 2);
 }
 addEventListener('resize', resize); resize();
 
@@ -386,6 +400,44 @@ const Music = (() => {
   return { start, toggle, place, show };
 })();
 
+// ---------- Кнопки управления (телефон, планшет) ----------
+// Показываются только на сенсорных экранах и только во время игры. Свайп по полю тоже работает.
+const Pad = (() => {
+  if (!IS_TOUCH) return { show() {} };
+  const root = document.createElement('div'); root.id = 'pad';
+  const ARROWS = { '0,-1': '50,24 78,70 22,70', '0,1': '50,76 78,30 22,30', '-1,0': '24,50 70,22 70,78', '1,0': '76,50 30,22 30,78' };
+  const mk = (label, dx, dy, col, row) => {
+    const b = document.createElement('button');
+    b.innerHTML = '<svg viewBox="0 0 100 100"><polygon points="' + ARROWS[dx + ',' + dy] + '" fill="#3a2a16"/></svg>';
+    b.tabIndex = -1; b.setAttribute('aria-label', label);
+    b.style.gridColumn = col; b.style.gridRow = row;
+    b.addEventListener('pointerdown', e => { e.preventDefault(); e.stopPropagation(); pushDir(dx, dy); cv.focus(); });
+    return b;
+  };
+  root.append(mk('▲', 0, -1, 2, 1), mk('◀', -1, 0, 1, 2), mk('▶', 1, 0, 3, 2), mk('▼', 0, 1, 2, 3));
+  document.body.appendChild(root);
+  const skin = new Image();                                  // есть assets/btn.png — кнопки получают твою подложку
+  skin.onload = () => root.classList.add('skin');
+  skin.src = 'assets/btn.png';
+  let last = '';
+  function show(v) {
+    if (!v) { if (root.style.display !== 'none') root.style.display = 'none'; return; }
+    const b = PAD_BTN, size = b * 3 + 12, safe = 14;
+    let x, y, opacity = 1, sc = 1;
+    const freeRight = cw - (ox + W * CS), fieldBottom = oy + H * CS;
+    if (ch > cw) { x = (cw - size) / 2; y = ch - size - safe; }                                       // вертикальный экран: по центру внизу
+    else if (freeRight >= size + 24) { x = ox + W * CS + (freeRight - size) / 2; y = ch - size - safe; } // горизонтальный: справа от поля
+    else { x = cw - size - 10; y = ch - size - 10; opacity = 0.6; }                                       // тесно: поверх поля, полупрозрачные
+    const key = [Math.round(x), Math.round(y), b, opacity].join();
+    if (key !== last) {
+      last = key;
+      root.style.cssText = 'display:grid;left:' + Math.round(x) + 'px;top:' + Math.round(y) + 'px;width:' + size + 'px;height:' + size + 'px;opacity:' + opacity;
+      root.querySelectorAll('button').forEach(el => { el.style.fontSize = Math.round(b * 0.42) + 'px'; });
+    } else if (root.style.display !== 'grid') root.style.display = 'grid';
+  }
+  return { show };
+})();
+
 // ---------- Ввод ----------
 function pushDir(dx, dy) {
   if (!S || S.state !== 'play') return;
@@ -456,7 +508,7 @@ function drawRock(sx, sy) {   // заглушка стены: тёмный не�
 function drawCandles() {
   const cells = [...S.walls].map(i => [i % W, Math.floor(i / W)]);
   for (const [x, y] of cells) {                       // ореол
-    const cx = ox + x * CS + CS / 2, cy = oy + y * CS + CS * 0.38, r = CS * 1.05;
+    const cx = ox + x * CS + CS / 2, cy = oy + y * CS + CS * 0.38, r = CS * 0.8;
     const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
     g.addColorStop(0, 'rgba(255,190,90,.40)'); g.addColorStop(1, 'rgba(255,150,60,0)');
     ctx.fillStyle = g; ctx.fillRect(cx - r, cy - r, r * 2, r * 2);
@@ -671,7 +723,7 @@ function drawHUD() {
   const g = ctx.createLinearGradient(0, 0, cw, 0);               // полоска рассвета
   g.addColorStop(0, '#2a1d4d'); g.addColorStop(1, '#ff9a5c');
   ctx.fillStyle = g; ctx.fillRect(0, 0, cw * Math.max(0, Math.min(1, p)), 5);
-  const a = scroll('hud', cw / 2, 8, Math.min(cw - 16, 920));
+  const a = scroll('hud', cw / 2, 8, hudWidth());
   if (a.w < 60 || a.h < 20) return;
   // крупный таймер слева
   const left = Math.max(0, Math.ceil(S.t)), tw = a.w * 0.34;
@@ -721,7 +773,8 @@ function render() {
   ctx.fillStyle = 'rgba(255,140,90,' + (p * 0.32) + ')'; ctx.fillRect(0, 0, cw, ch);
   if (S.flash > 0) { ctx.fillStyle = 'rgba(255,40,40,' + S.flash + ')'; ctx.fillRect(0, 0, cw, ch); }
   drawHUD();
-  Music.show(S.state === 'play');                       // поверх экранов старта и конца игры кнопка не нужна
+  Music.show(S.state === 'play');
+  Pad.show(S.state === 'play');                       // поверх экранов старта и конца игры кнопка не нужна
   if (S.msgT > 0) {
     const w = Math.min(cw * 0.92, 620), h = w / SCROLL.hint.aspect;
     if (w < 60) return;
@@ -734,19 +787,19 @@ function render() {
     { text: '🎃 — тыква забирает последнюю душу из собранной цепочки', gap: .5 },
     { text: '🕯️ — касание свечи заканчивает игру', gap: 1.1 },
     { parts: [{ text: 'Чтобы выключить музыку, нажми ' }, { icon: 'volume' }, { text: ' рядом с таймером' }], gap: 1.1 },
-    { text: 'Чтобы начать, нажми пробел', k: .8, gap: 0 }
+    { text: IS_TOUCH ? 'Чтобы начать, коснись экрана' : 'Чтобы начать, нажми пробел', k: .8, gap: 0 }
   ]);
   if (S.state === 'win') overlay('result', [
     { text: 'Души дома! 🪦', font: HEAD_FONT, k: 1.9, color: INK_TITLE, gap: .7 },
     { text: 'Ты успел за ' + fmt(NIGHT - S.t) + ' из ' + fmt(NIGHT) + '.' },
-    { text: 'Чтобы сыграть ещё раз, кликни по экрану', k: .8, gap: 0 }
+    { text: (IS_TOUCH ? 'Чтобы сыграть ещё раз, коснись экрана' : 'Чтобы сыграть ещё раз, кликни по экрану'), k: .8, gap: 0 }
   ]);
   if (S.state === 'lose') {
     const candle = S.loseReason === 'candle';
     overlay('result', [
       { text: candle ? 'Скелет обжёгся о свечу 🔥' : 'Рассвет… ☀️', font: HEAD_FONT, k: 1.8, color: INK_TITLE, gap: .7 },
       { text: candle ? 'Души разбежались.' : 'Души не успели вернуться.' },
-      { text: 'Чтобы сыграть ещё раз, кликни по экрану', k: .8, gap: 0 }
+      { text: (IS_TOUCH ? 'Чтобы сыграть ещё раз, коснись экрана' : 'Чтобы сыграть ещё раз, кликни по экрану'), k: .8, gap: 0 }
     ]);
   }
 }
